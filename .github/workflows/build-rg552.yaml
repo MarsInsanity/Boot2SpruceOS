@@ -55,9 +55,21 @@ jobs:
         run: |
           if [ -n "$APK_KEYSTORE_B64" ]; then
             [ -n "$KEYSTORE_PASS" ] || { echo "::error::RG552_APK_KEYSTORE is set but RG552_APK_KEYSTORE_PASS is missing or empty: add the keystore's password as that secret"; exit 1; }
-            printf '%s' "$APK_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/rg552.keystore" ||
+            # Copy-paste and PowerShell pipes can leave a CR/LF on the end of a secret.
+            KEYSTORE_PASS="${KEYSTORE_PASS%%[$'\r\n']*}"
+            printf '%s' "$APK_KEYSTORE_B64" | tr -d '\r\n ' | base64 -d > "$RUNNER_TEMP/rg552.keystore" ||
               { echo "::error::RG552_APK_KEYSTORE is not valid base64 of a keystore"; exit 1; }
-            export KEYSTORE="$RUNNER_TEMP/rg552.keystore"
+            # To compare with the keystore file: sha256sum rg552.keystore, or in
+            # PowerShell Get-FileHash rg552.keystore (SHA256 is its default).
+            echo "Keystore from RG552_APK_KEYSTORE: $(stat -c %s "$RUNNER_TEMP/rg552.keystore") bytes, SHA-256 $(sha256sum "$RUNNER_TEMP/rg552.keystore" | cut -d' ' -f1)"
+            if ! keytool -list -keystore "$RUNNER_TEMP/rg552.keystore" -storepass "$KEYSTORE_PASS" -alias "$KEY_ALIAS" >/dev/null 2>"$RUNNER_TEMP/keytool.err"; then
+              grep -q -i 'password' "$RUNNER_TEMP/keytool.err" &&
+                echo "::error::RG552_APK_KEYSTORE_PASS does not open the keystore in RG552_APK_KEYSTORE (wrong password, or the two secrets come from different keystores: compare the SHA-256 above with your file)" ||
+                echo "::error::the keystore in RG552_APK_KEYSTORE has no key \"$KEY_ALIAS\" (set RG552_APK_KEY_ALIAS to its alias): $(head -c 300 "$RUNNER_TEMP/keytool.err")"
+              rm -f "$RUNNER_TEMP/rg552.keystore"
+              exit 1
+            fi
+            export KEYSTORE="$RUNNER_TEMP/rg552.keystore" KEYSTORE_PASS
           else
             echo "::warning::No RG552_APK_KEYSTORE secret: signed with a throwaway key, so it will not install over an earlier build"
             unset KEYSTORE_PASS KEY_ALIAS
@@ -90,7 +102,15 @@ jobs:
             while gh api "repos/$REPO/git/ref/tags/$new" >/dev/null 2>&1; do
               new="rg552-${built}-${n}"; n=$((n + 1))
             done
-            gh api -X POST "repos/$REPO/git/refs" -f ref="refs/tags/$new" -f sha="$sha" >/dev/null
+            # The workflow token may not create a tag on an older commit whose
+            # workflow file differs from this branch's (HTTP 403; RELEASE_TOKEN,
+            # a token with Contents and Workflows write here, may). Then the
+            # archive tag goes on this build's commit; its notes still name the
+            # commit it was built from.
+            if ! gh api -X POST "repos/$REPO/git/refs" -f ref="refs/tags/$new" -f sha="$sha" >/dev/null; then
+              echo "::warning::could not tag $sha as $new with this token; tagging $GITHUB_SHA instead (the release notes keep the build's own commit)"
+              gh api -X POST "repos/$REPO/git/refs" -f ref="refs/tags/$new" -f sha="$GITHUB_SHA" >/dev/null
+            fi
             gh release edit RG552 --repo "$REPO" --tag "$new" --title "Boot2SpruceOS for the RG552 (built ${built})"
             echo "Previous RG552 build ($sha) is now $new"
           fi
