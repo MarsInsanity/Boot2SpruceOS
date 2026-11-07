@@ -54,7 +54,9 @@ jobs:
           KEY_ALIAS: ${{ secrets.RG552_APK_KEY_ALIAS || 'rg552' }}
         run: |
           if [ -n "$APK_KEYSTORE_B64" ]; then
-            printf '%s' "$APK_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/rg552.keystore"
+            [ -n "$KEYSTORE_PASS" ] || { echo "::error::RG552_APK_KEYSTORE is set but RG552_APK_KEYSTORE_PASS is missing or empty: add the keystore's password as that secret"; exit 1; }
+            printf '%s' "$APK_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/rg552.keystore" ||
+              { echo "::error::RG552_APK_KEYSTORE is not valid base64 of a keystore"; exit 1; }
             export KEYSTORE="$RUNNER_TEMP/rg552.keystore"
           else
             echo "::warning::No RG552_APK_KEYSTORE secret: signed with a throwaway key, so it will not install over an earlier build"
