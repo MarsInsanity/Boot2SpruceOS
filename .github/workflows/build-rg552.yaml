@@ -1,0 +1,124 @@
+# Builds Boot2SpruceOS.apk, the "SpruceOS" Android app for the Anbernic RG552,
+# and publishes it as the release tagged "RG552", which always holds the newest
+# build. The release it replaces is first moved to rg552-<date built>
+# (rg552-YYYY-MM-DD; -2, -3 ... for more builds that day), as the dArkMoss RG552
+# images are, so older builds stay downloadable.
+#
+# The app bundles dArkMoss's boot switch script (scripts/rg552/rg552-bootswitch
+# in MarsInsanity/BobMoss, branch rg552); each build takes it at the commit that
+# branch is on, named in the release notes.
+#
+# Signing: the keystore in the RG552_APK_KEYSTORE secret (base64; password
+# RG552_APK_KEYSTORE_PASS, alias RG552_APK_KEY_ALIAS or "rg552"), so each
+# build installs over the previous one. Without it a throwaway key is used, and
+# the old app has to be uninstalled first.
+
+name: build-rg552
+
+on:
+  push:
+    branches: [rg552]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-rg552
+  cancel-in-progress: false
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Find the boot switch script's commit
+        id: script
+        run: |
+          sha="$(git ls-remote https://github.com/MarsInsanity/BobMoss refs/heads/rg552 | cut -f 1)"
+          [ -n "$sha" ] || { echo "::error::could not read MarsInsanity/BobMoss branch rg552"; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      # The version code is minutes since the epoch: it only ever goes up.
+      - name: Build the APK
+        env:
+          BOOTSWITCH_REF: ${{ steps.script.outputs.sha }}
+          APK_KEYSTORE_B64: ${{ secrets.RG552_APK_KEYSTORE }}
+          KEYSTORE_PASS: ${{ secrets.RG552_APK_KEYSTORE_PASS }}
+          KEY_ALIAS: ${{ secrets.RG552_APK_KEY_ALIAS || 'rg552' }}
+        run: |
+          if [ -n "$APK_KEYSTORE_B64" ]; then
+            printf '%s' "$APK_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/rg552.keystore"
+            export KEYSTORE="$RUNNER_TEMP/rg552.keystore"
+          else
+            echo "::warning::No RG552_APK_KEYSTORE secret: signed with a throwaway key, so it will not install over an earlier build"
+            unset KEYSTORE_PASS KEY_ALIAS
+          fi
+          export VERSION_CODE="$(( $(date -u +%s) / 60 ))"
+          export VERSION_NAME="1.$(date -u +%Y%m%d.%H%M)"
+          echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
+          ./build.sh "$PWD/Boot2SpruceOS.apk"
+          rm -f "$RUNNER_TEMP/rg552.keystore"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Boot2SpruceOS
+          path: Boot2SpruceOS.apk
+
+      - name: Move the previous RG552 build to rg552-<date built>
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if gh release view RG552 --repo "$REPO" >/dev/null 2>&1; then
+            built="$(gh release view RG552 --repo "$REPO" --json createdAt -q .createdAt | cut -c1-10)"
+            ref="$(gh api "repos/$REPO/git/ref/tags/RG552")"
+            sha="$(jq -r .object.sha <<<"$ref")"
+            if [ "$(jq -r .object.type <<<"$ref")" = tag ]; then
+              sha="$(gh api "repos/$REPO/git/tags/$sha" -q .object.sha)"
+            fi
+            new="rg552-${built}"; n=2
+            while gh api "repos/$REPO/git/ref/tags/$new" >/dev/null 2>&1; do
+              new="rg552-${built}-${n}"; n=$((n + 1))
+            done
+            gh api -X POST "repos/$REPO/git/refs" -f ref="refs/tags/$new" -f sha="$sha" >/dev/null
+            gh release edit RG552 --repo "$REPO" --tag "$new" --title "Boot2SpruceOS for the RG552 (built ${built})"
+            echo "Previous RG552 build ($sha) is now $new"
+          fi
+          if gh api "repos/$REPO/git/ref/tags/RG552" >/dev/null 2>&1; then
+            gh api -X DELETE "repos/$REPO/git/refs/tags/RG552"
+          fi
+
+      - name: Publish as RG552
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+          REPO: ${{ github.repository }}
+          SCRIPT_SHA: ${{ steps.script.outputs.sha }}
+        run: |
+          set -euo pipefail
+          sha256sum Boot2SpruceOS.apk > SHA256SUMS
+          cat > notes.md <<NOTES
+          The "SpruceOS" app for the Anbernic RG552's Android: press A to boot back
+          into dArkMoss and spruce on the TF1 card after spruce's "Boot to Android".
+          Needs root (the stock firmware's su, or Magisk).
+
+          Version: ${VERSION_NAME}
+          Built: $(date -u +%Y-%m-%d)
+          Commit: ${GITHUB_SHA}
+          Boot switch script: MarsInsanity/BobMoss@${SCRIPT_SHA} (scripts/rg552/rg552-bootswitch)
+
+          The tag \`RG552\` always holds the newest build; older builds are kept as
+          \`rg552-<date built>\`.
+          NOTES
+          gh release create RG552 Boot2SpruceOS.apk SHA256SUMS \
+            --repo "$REPO" \
+            --target "$GITHUB_SHA" \
+            --title "Boot2SpruceOS for the RG552 ${VERSION_NAME}" \
+            --notes-file notes.md

@@ -1,16 +1,31 @@
-# SpruceOS (Android app for the RG552)
+# Boot2SpruceOS (Anbernic RG552)
 
-The Android half of switching the Anbernic RG552 between Android (eMMC) and
-dArkMoss/spruce (TF1 card). It used to be called "RG552 Boot Switch"; the
-package name is unchanged, so it replaces that app.
+The Android app, labelled "SpruceOS" on the device, that takes an Anbernic
+RG552 from its stock Android (eMMC) back to dArkMoss and spruce on the TF1 card.
+It replaces the "RG552 Boot Switch" app, and keeps its package name
+(`org.darkmoss.rg552bootswitch`), so the two never sit side by side.
+
+The `rg552` branch is the RG552 app. It used to live in dArkMoss's RG552 fork
+([MarsInsanity/BobMoss](https://github.com/MarsInsanity/BobMoss), branch `rg552`,
+`android/rg552-bootswitch/`); its history came along.
+
+Download: the release tagged [`RG552`](https://github.com/MarsInsanity/Boot2SpruceOS/releases/tag/RG552), which always
+holds the newest build. Older builds are kept as `rg552-<date built>`.
+
+## How the switch works
 
 - **dArkMoss → Android**: spruce's *Boot to Android* app runs
   `rg552-bootswitch android`. It saves the first sector of each boot loader
-  stage on the TF1 card into its unused sectors 40-42 (marker in 39), blanks
+  stage on the TF1 card into its unused sectors from 40 (marker in 39), blanks
   them, and reboots. With no loader on TF1, the RG552 starts Android.
-- **Android → dArkMoss**: this app runs the same script
-  (`scripts/rg552/rg552-bootswitch`, bundled as an asset) with `linux`, which
+- **Android → dArkMoss**: this app runs the same script with `linux`, which
   copies the saved sectors back, then reboots.
+
+The script is dArkMoss's own: `scripts/rg552/rg552-bootswitch` in
+MarsInsanity/BobMoss, branch `rg552`, also installed on the card as
+`/usr/local/sbin/rg552-bootswitch`. `build.sh` downloads it and bundles it as an
+asset, so the app and spruce's *Boot to Android* always agree on how the saved
+loader is marked. Each release names the commit it took the script from.
 
 ## Using it
 
@@ -49,32 +64,35 @@ SIL Open Font License: `assets/fonts/OFL.txt`), cut down to Latin characters.
 
 ## Building
 
-GitHub Actions builds it (`build-rg552-android` workflow; the APK is an
-artifact, and can be attached to a release by tag). Locally, with an Android
-SDK (a platform of API 33 or later) and a JDK:
+GitHub Actions builds it on every push to `rg552` (`build-rg552` workflow) and
+publishes the `RG552` release. Locally, with an Android SDK (a platform of API
+33 or later), a JDK, git and curl:
 
-    ANDROID_HOME=~/Android/Sdk android/rg552-bootswitch/build.sh
+    ANDROID_HOME=~/Android/Sdk ./build.sh
 
 No Gradle: `build.sh` drives aapt2, javac, d8, zipalign and apksigner directly.
-Set `KEYSTORE`, `KEYSTORE_PASS` and `KEY_ALIAS` to sign with your own key;
-otherwise a throwaway key is generated, so an update built elsewhere has to be
-installed over an uninstall.
+`BOOTSWITCH_SCRIPT=path` bundles a local copy of the script instead of
+downloading it; `BOOTSWITCH_REPO` and `BOOTSWITCH_REF` pick where it is
+downloaded from (default `MarsInsanity/BobMoss`, `rg552`).
 
 ## Signing key (so updates install over the previous app)
 
 Android only installs an update over an app signed with the same key. The
-workflow signs with the keystore in the repository secret `RG552_APK_KEYSTORE`
-(base64), password `RG552_APK_KEYSTORE_PASS`, alias `RG552_APK_KEY_ALIAS`
-(optional, default `rg552`); without the secret it falls back to a throwaway
-key and warns. To create it once, on any PC with a JDK and the GitHub CLI:
+workflow signs with the keystore in this repository's secret
+`RG552_APK_KEYSTORE` (base64), password `RG552_APK_KEYSTORE_PASS`, alias
+`RG552_APK_KEY_ALIAS` (optional, default `rg552`); without the secret it falls
+back to a throwaway key and warns. To create it once, on any PC with a JDK and
+the GitHub CLI:
 
     keytool -genkeypair -keystore rg552.keystore -alias rg552 -keyalg RSA \
       -keysize 2048 -validity 10000 -dname "CN=dArkMoss RG552"
-    base64 -w0 rg552.keystore | gh secret set RG552_APK_KEYSTORE -R MarsInsanity/BobMoss
-    gh secret set RG552_APK_KEYSTORE_PASS -R MarsInsanity/BobMoss
+    base64 -w0 rg552.keystore | gh secret set RG552_APK_KEYSTORE -R MarsInsanity/Boot2SpruceOS
+    gh secret set RG552_APK_KEYSTORE_PASS -R MarsInsanity/Boot2SpruceOS
 
 (keytool asks for the password; give the same one to the second `gh secret
-set`.) Keep `rg552.keystore` somewhere safe: an app signed with a different
-key cannot update this one. The first build signed with it still needs the old
-app uninstalled once. Version codes are minutes since the epoch, so every
-build is newer than the last.
+set`. On macOS, `base64 -i rg552.keystore` instead of `base64 -w0`.) Keep
+`rg552.keystore` somewhere safe: an app signed with a different key cannot
+update this one. The first build signed with it still needs the old app
+uninstalled once. Version codes are minutes since the epoch, so every build is
+newer than the last. Locally, set `KEYSTORE`, `KEYSTORE_PASS` and `KEY_ALIAS`
+for `build.sh` to sign with the same key.

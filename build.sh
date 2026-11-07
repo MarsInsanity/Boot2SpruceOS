@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build RG552BootSwitch.apk (the "SpruceOS" app) with the bare Android SDK
+# Build Boot2SpruceOS.apk (the "SpruceOS" app) with the bare Android SDK
 # tools (no Gradle): aapt2, javac, d8, zipalign, apksigner. Needs ANDROID_HOME
 # (or ANDROID_SDK_ROOT) with build-tools and a platform of API 33 or later
 # (the icon's monochrome layer) installed, and a JDK.
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-OUT_APK="${1:-$HERE/RG552BootSwitch.apk}"
+OUT_APK="${1:-$HERE/Boot2SpruceOS.apk}"
 SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
 [ -n "$SDK" ] && [ -d "$SDK" ] || { echo "ANDROID_HOME is not set" >&2; exit 1; }
 BT="$(ls -d "$SDK"/build-tools/* | sort -V | tail -n 1)"
@@ -27,11 +27,31 @@ VERSION_CODE="${VERSION_CODE:-1}"
 BUILD="$(mktemp -d)"
 trap 'rm -rf "$BUILD"' EXIT
 
-# The script is the one dArkMoss ships (scripts/rg552), bundled as an asset,
-# next to spruce's font (assets/fonts).
+# The boot switch script is dArkMoss's own (scripts/rg552/rg552-bootswitch in
+# MarsInsanity/BobMoss, branch rg552), the one spruce's "Boot to Android" runs,
+# so the two always agree on how the saved boot loader is marked. It is bundled
+# as an asset, next to spruce's font (assets/fonts):
+#   BOOTSWITCH_SCRIPT=path            a local copy
+#   BOOTSWITCH_REPO / BOOTSWITCH_REF  otherwise, downloaded from that GitHub
+#                                     repository at that branch, tag or commit
+#                                     (default MarsInsanity/BobMoss, rg552)
 mkdir -p "$BUILD/assets" "$BUILD/classes" "$BUILD/dex" "$BUILD/gen"
 cp -r "$HERE/assets/." "$BUILD/assets/"
-cp "$HERE/../../scripts/rg552/rg552-bootswitch" "$BUILD/assets/rg552-bootswitch.sh"
+if [ -n "${BOOTSWITCH_SCRIPT:-}" ]; then
+  cp "$BOOTSWITCH_SCRIPT" "$BUILD/assets/rg552-bootswitch.sh"
+  echo "rg552-bootswitch: $BOOTSWITCH_SCRIPT"
+else
+  BOOTSWITCH_REPO="${BOOTSWITCH_REPO:-MarsInsanity/BobMoss}"
+  BOOTSWITCH_REF="${BOOTSWITCH_REF:-rg552}"
+  # A branch or tag becomes the commit it points at, so the build says what it used.
+  sha="$(git ls-remote "https://github.com/$BOOTSWITCH_REPO" "refs/heads/$BOOTSWITCH_REF" "refs/tags/$BOOTSWITCH_REF" | head -n 1 | cut -f 1)"
+  sha="${sha:-$BOOTSWITCH_REF}"
+  curl -fsSL "https://raw.githubusercontent.com/$BOOTSWITCH_REPO/$sha/scripts/rg552/rg552-bootswitch" \
+    -o "$BUILD/assets/rg552-bootswitch.sh"
+  echo "rg552-bootswitch: $BOOTSWITCH_REPO@$sha"
+fi
+grep -q '^MAGIC="RG552BOOTSWITCH' "$BUILD/assets/rg552-bootswitch.sh" ||
+  { echo "rg552-bootswitch.sh does not look like the boot switch script" >&2; exit 1; }
 
 "$BT/aapt2" compile --dir "$HERE/res" -o "$BUILD/res.zip"
 "$BT/aapt2" link -o "$BUILD/base.apk" -I "$PLATFORM_JAR" \
